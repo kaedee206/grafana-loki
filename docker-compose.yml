@@ -1,0 +1,374 @@
+###############################################################################
+# DEVSECOPS MONITORING STACK - docker-compose.yml
+# Fedora Server | Security-Hardened | Least Privilege Design
+#
+# NETWORK SECURITY:
+#   - Chỉ Nginx expose port 80/443 ra host
+#   - TẤT CẢ services khác chỉ giao tiếp qua internal network 'monitoring_net'
+#   - Node Exporter, cAdvisor, Prometheus, Loki: KHÔNG bind port ra host
+#
+# USER SECURITY:
+#   - Exporter chạy với user nobody (65534:65534) hoặc user riêng
+#   - no-new-privileges: true trên tất cả containers
+#   - read_only filesystem, volumes mount :ro nơi có thể
+###############################################################################
+
+networks:
+  monitoring_net:
+    driver: bridge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.27.0.0/24
+
+volumes:
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  loki_data:
+    driver: local
+  alertmanager_data:
+    driver: local
+  node_exporter_textfiles:
+    driver: local
+
+services:
+
+  # ===========================================================================
+  # NGINX - Reverse Proxy (Cloudflare Tunnel Mode)
+  # SSL xử lý bởi Cloudflare, Nginx chỉ serve HTTP nội bộ trên port 80
+  # ===========================================================================
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: monitoring_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"      # Cloudflare Tunnel kết nối vào đây
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro,z
+    networks:
+      - monitoring_net
+    depends_on:
+      - grafana
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "com.monitoring.service=nginx"
+
+  # ===========================================================================
+  # PROMETHEUS - Core metrics storage
+  # KHÔNG expose port ra host
+  # ===========================================================================
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: monitoring_prometheus
+    restart: unless-stopped
+    expose:
+      - "9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro,z
+      - ./prometheus/web.yml:/etc/prometheus/web.yml:ro,z
+      - ./prometheus/rules:/etc/prometheus/rules:ro,z
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
+      - '--web.enable-lifecycle'
+      - '--web.external-url=http://prometheus:9090'
+      - '--log.level=warn'
+    networks:
+      - monitoring_net
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9090"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "com.monitoring.service=prometheus"
+
+  # ===========================================================================
+  # ALERTMANAGER
+  # ===========================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: monitoring_alertmanager
+    restart: unless-stopped
+    expose:
+      - "9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro,z
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://alertmanager:9093'
+      - '--log.level=warn'
+    networks:
+      - monitoring_net
+    user: "65534:65534"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    labels:
+      - "com.monitoring.service=alertmanager"
+
+  # ===========================================================================
+  # NODE EXPORTER - Thu thập metrics hệ thống
+  # ===========================================================================
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: monitoring_node_exporter
+    restart: unless-stopped
+    expose:
+      - "9100"
+    volumes:
+      - /proc:/host/proc:ro,rslave
+      - /sys:/host/sys:ro,rslave
+      - /:/host/root:ro,rslave
+      - ./node_exporter_textfiles:/host/textfiles:ro,z
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/host/root'
+      - '--collector.textfile.directory=/host/textfiles'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.systemd'
+      - '--collector.processes'
+      - '--no-collector.ipvs'
+      - '--log.level=warn'
+    networks:
+      - monitoring_net
+    pid: host
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 128M
+    labels:
+      - "com.monitoring.service=node-exporter"
+
+  # ===========================================================================
+  # CADVISOR - Giám sát Docker containers
+  # ===========================================================================
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.50.0
+    container_name: monitoring_cadvisor
+    restart: unless-stopped
+    expose:
+      - "8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - '--housekeeping_interval=30s'
+      - '--max_housekeeping_interval=60s'
+      - '--allow_dynamic_housekeeping=true'
+      - '--docker_only=true'
+      - '--disable_metrics=tcp,udp,percpu,sched,process'
+      - '--store_container_labels=true'
+    networks:
+      - monitoring_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_PTRACE
+      - DAC_READ_SEARCH
+    devices:
+      - /dev/kmsg:/dev/kmsg:r
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    labels:
+      - "com.monitoring.service=cadvisor"
+
+  # ===========================================================================
+  # LOKI - Log aggregation backend
+  # ===========================================================================
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: monitoring_loki
+    restart: unless-stopped
+    expose:
+      - "3100"
+    volumes:
+      - ./loki/loki-config.yml:/loki-config.yml:ro,z
+      - loki_data:/loki
+    command:
+      - '-config.file=/loki-config.yml'
+      - '-log.level=warn'
+    networks:
+      - monitoring_net
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # read_only: true bị bỏ vì Loki cần write vào /etc/loki/ và các thư mục nội bộ
+    # Security vẫn đảm bảo qua cap_drop + no-new-privileges + user isolation
+    tmpfs:
+      - /tmp
+      - /run
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    labels:
+      - "com.monitoring.service=loki"
+
+  # ===========================================================================
+  # PROMTAIL - Thu thập logs từ Docker containers
+  # ===========================================================================
+  promtail:
+    image: grafana/promtail:3.2.1
+    container_name: monitoring_promtail
+    restart: unless-stopped
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro,z
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - '-config.file=/etc/promtail/promtail-config.yml'
+      - '-log.level=warn'
+    networks:
+      - monitoring_net
+    security_opt:
+      - label=disable
+    # Bỏ cap_drop: ALL để promtail có thể đọc log host
+    user: "0:999"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 128M
+    labels:
+      - "com.monitoring.service=promtail"
+
+  # ===========================================================================
+  # GRAFANA - Dashboard
+  # Chỉ expose qua Nginx
+  # ===========================================================================
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: monitoring_grafana
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      - GF_SECURITY_SECRET_KEY=${GRAFANA_SECRET_KEY:?GRAFANA_SECRET_KEY is required}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-https://your-domain.com}
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+      - GF_SMTP_ENABLED=${SMTP_ENABLED:-false}
+      - GF_SMTP_HOST=${SMTP_HOST:-}
+      - GF_SMTP_USER=${SMTP_USER:-}
+      - GF_SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - GF_SMTP_FROM_ADDRESS=${SMTP_FROM_ADDRESS:-}
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-CHANGE_ME}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-123456789}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-https://discord.com/api/webhooks/CHANGE_ME}
+      - ALERTMANAGER_EMAIL_TO=${ALERTMANAGER_EMAIL_TO:-admin@your-domain.com}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini:ro,z
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro,z
+    networks:
+      - monitoring_net
+    user: "472:472"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    depends_on:
+      loki:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    labels:
+      - "com.monitoring.service=grafana"

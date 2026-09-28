@@ -1,0 +1,54 @@
+# ==============================================================================
+# RECORDING RULES - recording.rules.yml
+# Pre-computed metrics để tối ưu performance Dashboard
+# ==============================================================================
+
+groups:
+
+  - name: system_recording
+    interval: 30s
+    rules:
+
+      # CPU sử dụng (%) - Pre-computed để dashboard query nhanh hơn
+      - record: instance:node_cpu_usage:rate2m
+        expr: |
+          (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[2m])) by (instance)) * 100
+
+      # RAM sử dụng (%)
+      - record: instance:node_memory_usage:ratio
+        expr: |
+          1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+
+      # Network bandwidth (bytes/s) per interface
+      - record: instance:node_network_receive:rate5m
+        expr: |
+          rate(node_network_receive_bytes_total{device!~"lo|docker.*|veth.*|br-.*"}[5m])
+
+      - record: instance:node_network_transmit:rate5m
+        expr: |
+          rate(node_network_transmit_bytes_total{device!~"lo|docker.*|veth.*|br-.*"}[5m])
+
+      # Disk usage per mountpoint
+      - record: instance:node_filesystem_usage:ratio
+        expr: |
+          1 - (
+            node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs|overlay|aufs"}
+            /
+            node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs|overlay|aufs"}
+          )
+
+  - name: container_recording
+    interval: 30s
+    rules:
+
+      # Container CPU usage
+      - record: container:cpu_usage:rate5m
+        expr: |
+          rate(container_cpu_usage_seconds_total{container!="", image!=""}[5m]) * 100
+
+      # Container memory usage ratio
+      - record: container:memory_usage:ratio
+        expr: |
+          container_memory_working_set_bytes{container!="", image!=""}
+          /
+          container_spec_memory_limit_bytes{container!="", image!=""}

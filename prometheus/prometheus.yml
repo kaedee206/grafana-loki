@@ -1,0 +1,99 @@
+# ==============================================================================
+# PROMETHEUS CONFIGURATION - prometheus.yml
+# Bảo mật: Chỉ scrape internal network, không expose ra ngoài
+# ==============================================================================
+
+global:
+  scrape_interval: 60s           # Scrape mỗi 60 giây (tiết kiệm tài nguyên)
+  evaluation_interval: 60s       # Evaluate rules mỗi 60 giây
+  scrape_timeout: 30s
+  external_labels:
+    monitor: 'fedora-server'
+    environment: 'production'
+
+# Load alert rules
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+# Alertmanager config - giao tiếp nội bộ
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - 'alertmanager:9093'
+      timeout: 10s
+      api_version: v2
+
+scrape_configs:
+
+  # --------------------------------------------------------------------------
+  # Node Exporter - System metrics (CPU, RAM, Disk, Network, Uptime)
+  # Bao gồm Textfile Collector cho custom metrics (user sessions, DB status)
+  # --------------------------------------------------------------------------
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          instance: 'fedora-server'
+          service: 'system'
+    scrape_interval: 30s       # Tần suất cao hơn cho system metrics
+    metrics_path: /metrics
+    # Basic auth nếu cần - tắt ở node-exporter vì nó internal only
+    # basic_auth:
+    #   username: prometheus
+    #   password_file: /etc/prometheus/secrets/node_exporter_password
+
+  # --------------------------------------------------------------------------
+  # cAdvisor - Container metrics (Docker status, port mapping, resource usage)
+  # --------------------------------------------------------------------------
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          instance: 'fedora-server'
+          service: 'docker'
+    scrape_interval: 30s
+    metrics_path: /metrics
+    # Lọc bỏ metrics không cần thiết để giảm cardinality
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'container_(cpu_usage_seconds_total|memory_usage_bytes|memory_working_set_bytes|network_receive_bytes_total|network_transmit_bytes_total|fs_reads_bytes_total|fs_writes_bytes_total|spec_cpu_quota|spec_memory_limit_bytes|tasks_state|last_seen)'
+        action: keep
+      # Loại bỏ metrics của chính monitoring containers để tránh noise
+      - source_labels: [container_label_com_monitoring_service]
+        regex: '.+'
+        action: drop
+
+  # --------------------------------------------------------------------------
+  # Loki - Log metrics
+  # --------------------------------------------------------------------------
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+        labels:
+          instance: 'fedora-server'
+          service: 'logging'
+    scrape_interval: 60s
+    metrics_path: /metrics
+
+  # --------------------------------------------------------------------------
+  # Prometheus tự scrape (self-monitoring)
+  # --------------------------------------------------------------------------
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          instance: 'fedora-server'
+          service: 'monitoring'
+    scrape_interval: 60s
+
+  # --------------------------------------------------------------------------
+  # Alertmanager
+  # --------------------------------------------------------------------------
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          instance: 'fedora-server'
+          service: 'alerting'
+    scrape_interval: 60s

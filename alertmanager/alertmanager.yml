@@ -1,0 +1,127 @@
+# ==============================================================================
+# ALERTMANAGER CONFIG - alertmanager.yml
+# 3 kênh: Telegram, Discord, Email
+# ==============================================================================
+
+global:
+  resolve_timeout: 5m
+  # SMTP Global
+  smtp_smarthost: "smtp.gmail.com:587"
+  smtp_from: "alerts@your-domain.com"
+  smtp_auth_username: "your-email@gmail.com"
+  smtp_auth_password: "your-app-password"
+  smtp_require_tls: true
+
+# Template cho tin nhắn cảnh báo
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# ---- ROUTING RULES ----
+route:
+  # Nhóm alerts theo alertname + severity để tránh spam
+  group_by: ['alertname', 'severity', 'category']
+  group_wait: 30s        # Đợi 30s để gom alerts trước khi gửi
+  group_interval: 5m     # Đợi 5m trước khi gửi group tiếp theo
+  repeat_interval: 4h    # Gửi lại sau 4h nếu chưa resolve
+
+  # Receiver mặc định: gửi đến tất cả kênh
+  receiver: 'all-channels'
+
+  routes:
+    # Critical alerts: gửi ngay, không đợi group
+    - matchers:
+        - severity="critical"
+      receiver: 'all-channels'
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Warning alerts: gửi bình thường
+    - matchers:
+        - severity="warning"
+      receiver: 'all-channels'
+
+    # Monitoring self-alerts: chỉ gửi email
+    - matchers:
+        - category="monitoring"
+      receiver: 'email-only'
+
+# ---- INHIBITION RULES ----
+# Nếu có critical thì tắt warning cùng loại
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ['alertname', 'instance']
+
+# ---- RECEIVERS ----
+receivers:
+
+  # Gửi đến tất cả kênh
+  - name: 'all-channels'
+    telegram_configs:
+      - bot_token: "CHANGE_ME_BOT_TOKEN"
+        chat_id: 123456789
+        parse_mode: 'HTML'
+        message: |
+          {{ if eq .Status "firing" }}🔥{{ else }}✅{{ end }}
+          <b>{{ .GroupLabels.alertname }}</b>
+          <b>Status:</b> {{ .Status | toUpper }}
+          <b>Severity:</b> {{ .GroupLabels.severity }}
+          
+          {{ range .Alerts }}
+          <b>📌 {{ .Annotations.summary }}</b>
+          {{ .Annotations.description }}
+          <i>Started: {{ .StartsAt.Format "2006-01-02 15:04:05" }}</i>
+          {{ end }}
+        send_resolved: true
+
+    discord_configs:
+      - webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK"
+        title: |
+          {{ if eq .Status "firing" }}🔥 ALERT FIRING{{ else }}✅ RESOLVED{{ end }}: {{ .GroupLabels.alertname }}
+        message: |
+          **Severity:** {{ .GroupLabels.severity }}
+          **Status:** {{ .Status }}
+          
+          {{ range .Alerts }}
+          **{{ .Annotations.summary }}**
+          {{ .Annotations.description }}
+          Started: {{ .StartsAt.Format "2006-01-02 15:04:05" }}
+          {{ end }}
+        send_resolved: true
+
+    email_configs:
+      - to: "admin@your-domain.com"
+        send_resolved: true
+        headers:
+          Subject: |
+            [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }} - {{ .GroupLabels.severity }}
+        html: |
+          <!DOCTYPE html>
+          <html>
+          <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: {{ if eq .Status "firing" }}#dc3545{{ else }}#28a745{{ end }}; color: white; padding: 15px; border-radius: 5px 5px 0 0;">
+              <h2 style="margin:0">{{ if eq .Status "firing" }}🔥 Alert Firing{{ else }}✅ Alert Resolved{{ end }}</h2>
+            </div>
+            <div style="border: 1px solid #ddd; padding: 20px; border-radius: 0 0 5px 5px;">
+              <p><strong>Alert:</strong> {{ .GroupLabels.alertname }}</p>
+              <p><strong>Severity:</strong> {{ .GroupLabels.severity }}</p>
+              <p><strong>Status:</strong> {{ .Status }}</p>
+              <hr>
+              {{ range .Alerts }}
+              <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+                <strong>{{ .Annotations.summary }}</strong>
+                <pre style="white-space: pre-wrap; font-size: 13px;">{{ .Annotations.description }}</pre>
+                <small>Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}</small>
+              </div>
+              {{ end }}
+            </div>
+          </body>
+          </html>
+
+  # Chỉ gửi email
+  - name: 'email-only'
+    email_configs:
+      - to: "admin@your-domain.com"
+        send_resolved: true

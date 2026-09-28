@@ -1,0 +1,276 @@
+# ==============================================================================
+# PROMETHEUS ALERT RULES - alert.rules.yml
+# Ngưỡng cảnh báo: CPU/RAM/Disk /home > 70% trong 2 phút
+# Container Down, Node Down
+# ==============================================================================
+
+groups:
+
+  # ============================================================================
+  # NHÓM 1: SYSTEM RESOURCES - CPU, RAM, Disk
+  # ============================================================================
+  - name: system_resources
+    interval: 30s
+    rules:
+
+      # ------------------------------------------------------------------------
+      # CPU > 70% liên tục trong 2 phút
+      # ------------------------------------------------------------------------
+      - alert: HighCPUUsage
+        expr: |
+          (
+            1 - avg(rate(node_cpu_seconds_total{mode="idle"}[2m]))
+              by (instance)
+          ) * 100 > 70
+        for: 2m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "⚠️ CPU cao trên {{ $labels.instance }}"
+          description: |
+            CPU đang sử dụng {{ $value | printf "%.1f" }}% (ngưỡng: 70%)
+            Instance: {{ $labels.instance }}
+            Liên tục trong: 2 phút
+
+      - alert: CriticalCPUUsage
+        expr: |
+          (
+            1 - avg(rate(node_cpu_seconds_total{mode="idle"}[2m]))
+              by (instance)
+          ) * 100 > 90
+        for: 2m
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "🚨 CPU NGUY HIỂM trên {{ $labels.instance }}"
+          description: |
+            CPU đang sử dụng {{ $value | printf "%.1f" }}% (ngưỡng: 90%)
+            Instance: {{ $labels.instance }}
+            Hành động ngay: Kiểm tra process nặng với `top` hoặc `htop`
+
+      # ------------------------------------------------------------------------
+      # RAM > 70% liên tục trong 2 phút
+      # Tính RAM thực sự sử dụng (loại trừ buffers/cache)
+      # ------------------------------------------------------------------------
+      - alert: HighMemoryUsage
+        expr: |
+          (
+            1 - (
+              node_memory_MemAvailable_bytes /
+              node_memory_MemTotal_bytes
+            )
+          ) * 100 > 70
+        for: 2m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "⚠️ RAM cao trên {{ $labels.instance }}"
+          description: |
+            RAM sử dụng {{ $value | printf "%.1f" }}% (ngưỡng: 70%)
+            Available: {{ with printf "node_memory_MemAvailable_bytes{instance='%s'}" .Labels.instance | query }}{{ . | first | value | humanize1024 }}B{{ end }}
+            Total: {{ with printf "node_memory_MemTotal_bytes{instance='%s'}" .Labels.instance | query }}{{ . | first | value | humanize1024 }}B{{ end }}
+
+      - alert: CriticalMemoryUsage
+        expr: |
+          (
+            1 - (
+              node_memory_MemAvailable_bytes /
+              node_memory_MemTotal_bytes
+            )
+          ) * 100 > 90
+        for: 2m
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "🚨 RAM NGUY HIỂM trên {{ $labels.instance }}"
+          description: |
+            RAM sử dụng {{ $value | printf "%.1f" }}% (ngưỡng: 90%)
+            Hành động ngay: Kiểm tra process memory với `ps aux --sort=-%mem | head -20`
+
+      # ------------------------------------------------------------------------
+      # Disk /home > 70% liên tục trong 2 phút
+      # ------------------------------------------------------------------------
+      - alert: HighDiskUsageHome
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{mountpoint="/home", fstype!~"tmpfs|fuse.lxcfs"}
+              /
+              node_filesystem_size_bytes{mountpoint="/home", fstype!~"tmpfs|fuse.lxcfs"}
+            )
+          ) * 100 > 70
+        for: 2m
+        labels:
+          severity: warning
+          category: storage
+          mountpoint: "/home"
+        annotations:
+          summary: "⚠️ Disk /home đầy trên {{ $labels.instance }}"
+          description: |
+            Phân vùng /home đang dùng {{ $value | printf "%.1f" }}% (ngưỡng: 70%)
+            Instance: {{ $labels.instance }}
+
+      - alert: CriticalDiskUsageHome
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{mountpoint="/home", fstype!~"tmpfs|fuse.lxcfs"}
+              /
+              node_filesystem_size_bytes{mountpoint="/home", fstype!~"tmpfs|fuse.lxcfs"}
+            )
+          ) * 100 > 90
+        for: 2m
+        labels:
+          severity: critical
+          category: storage
+          mountpoint: "/home"
+        annotations:
+          summary: "🚨 Disk /home GẦN ĐẦY trên {{ $labels.instance }}"
+          description: |
+            Phân vùng /home sử dụng {{ $value | printf "%.1f" }}% (ngưỡng: 90%)
+            Hành động ngay: `du -sh /home/* | sort -rh | head -20`
+
+      # Cảnh báo các phân vùng khác
+      - alert: HighDiskUsageGeneral
+        expr: |
+          (
+            1 - (
+              node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs|overlay|aufs"}
+              /
+              node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs|overlay|aufs"}
+            )
+          ) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          category: storage
+        annotations:
+          summary: "⚠️ Disk {{ $labels.mountpoint }} đầy 80% trên {{ $labels.instance }}"
+          description: "Phân vùng {{ $labels.mountpoint }} đang dùng {{ $value | printf \"%.1f\" }}%"
+
+  # ============================================================================
+  # NHÓM 2: DOCKER CONTAINERS
+  # ============================================================================
+  - name: docker_containers
+    interval: 30s
+    rules:
+
+      # Container bị dừng đột ngột (không phải do người dùng dừng)
+      - alert: ContainerDown
+        expr: |
+          absent(container_last_seen{container_label_com_monitoring_service=""})
+          or
+          time() - container_last_seen{name!~".*monitoring.*"} > 120
+        for: 2m
+        labels:
+          severity: warning
+          category: docker
+        annotations:
+          summary: "⚠️ Container {{ $labels.name }} có thể bị dừng"
+          description: |
+            Container {{ $labels.name }} không gửi metrics trong > 2 phút
+            Image: {{ $labels.image }}
+
+      # Container dùng CPU quá nhiều
+      - alert: ContainerHighCPU
+        expr: |
+          rate(container_cpu_usage_seconds_total{container!="", container!~".*monitoring.*"}[5m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          category: docker
+        annotations:
+          summary: "⚠️ Container {{ $labels.name }} dùng CPU cao"
+          description: "Container {{ $labels.name }} đang dùng {{ $value | printf \"%.1f\" }}% CPU"
+
+      # Container dùng RAM vượt limit
+      - alert: ContainerHighMemory
+        expr: |
+          (
+            container_memory_working_set_bytes{container!="", container!~".*monitoring.*"}
+            /
+            container_spec_memory_limit_bytes{container!="", container!~".*monitoring.*"}
+          ) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          category: docker
+        annotations:
+          summary: "⚠️ Container {{ $labels.name }} gần đạt memory limit"
+          description: "Container {{ $labels.name }} đang dùng {{ $value | printf \"%.1f\" }}% memory limit"
+
+  # ============================================================================
+  # NHÓM 3: NODE/SERVER
+  # ============================================================================
+  - name: node_health
+    interval: 30s
+    rules:
+
+      # Server không gửi metrics
+      - alert: NodeDown
+        expr: up{job="node_exporter"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: infrastructure
+        annotations:
+          summary: "🚨 SERVER DOWN: {{ $labels.instance }}"
+          description: |
+            Node Exporter trên {{ $labels.instance }} không phản hồi.
+            Server có thể đã bị tắt hoặc mất kết nối mạng!
+
+      # Prometheus không thể scrape target
+      - alert: ScrapeFailed
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+          category: monitoring
+        annotations:
+          summary: "⚠️ Không thể scrape {{ $labels.job }} ({{ $labels.instance }})"
+          description: "Job {{ $labels.job }} đã thất bại scrape trong 5 phút"
+
+      # Load average cao
+      - alert: HighSystemLoad
+        expr: |
+          node_load15 / count without(cpu, mode)(node_cpu_seconds_total{mode="idle"}) > 2
+        for: 10m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "⚠️ Load average cao trên {{ $labels.instance }}"
+          description: "Load average 15min là {{ $value | printf \"%.2f\" }} per CPU core"
+
+  # ============================================================================
+  # NHÓM 4: NETWORK
+  # ============================================================================
+  - name: network_alerts
+    interval: 60s
+    rules:
+
+      - alert: HighNetworkReceive
+        expr: |
+          rate(node_network_receive_bytes_total{device!~"lo|docker.*|veth.*|br-.*"}[5m]) / 1024 / 1024 > 100
+        for: 5m
+        labels:
+          severity: warning
+          category: network
+        annotations:
+          summary: "⚠️ Băng thông Download cao trên {{ $labels.instance }}"
+          description: "Interface {{ $labels.device }} đang nhận {{ $value | printf \"%.1f\" }} MB/s"
+
+      - alert: HighNetworkTransmit
+        expr: |
+          rate(node_network_transmit_bytes_total{device!~"lo|docker.*|veth.*|br-.*"}[5m]) / 1024 / 1024 > 100
+        for: 5m
+        labels:
+          severity: warning
+          category: network
+        annotations:
+          summary: "⚠️ Băng thông Upload cao trên {{ $labels.instance }}"
+          description: "Interface {{ $labels.device }} đang gửi {{ $value | printf \"%.1f\" }} MB/s"

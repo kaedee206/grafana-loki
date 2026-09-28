@@ -1,0 +1,27 @@
+# HELP node_logged_users_ssh Number of active SSH sessions
+# TYPE node_logged_users_ssh gauge
+node_logged_users_ssh{user="kaedee",remote_ip="100.119.124.116",tty="pts_5"} 1
+# HELP node_logged_users_desktop Number of active desktop/GUI sessions
+# TYPE node_logged_users_desktop gauge
+node_logged_users_desktop{user="kaedee",session_type="x11",tty="tty2"} 1
+node_logged_users_desktop{user="kaedee",session_type="wayland",seat="seat0"} 1
+# HELP node_logged_users_rdp Number of active RDP sessions (xrdp)
+# TYPE node_logged_users_rdp gauge
+# HELP node_logged_users_total Total number of logged in users
+# TYPE node_logged_users_total gauge
+node_logged_users_total 3
+# HELP node_logged_users_ssh_total Total number of SSH sessions
+# TYPE node_logged_users_ssh_total gauge
+node_logged_users_ssh_total 1
+# HELP node_logged_users_desktop_total Total number of desktop/GUI sessions
+# TYPE node_logged_users_desktop_total gauge
+node_logged_users_desktop_total 2
+# HELP node_logged_users_rdp_total Total number of RDP sessions
+# TYPE node_logged_users_rdp_total gauge
+node_logged_users_rdp_total 0
+# HELP node_user_sessions_scrape_timestamp Last scrape timestamp
+# TYPE node_user_sessions_scrape_timestamp gauge
+node_user_sessions_scrape_timestamp 1790043813
+# HELP node_user_sessions_scrape_success 1 if scrape succeeded
+# TYPE node_user_sessions_scrape_success gauge
+node_user_sessions_scrape_success 1

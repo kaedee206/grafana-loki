@@ -1,0 +1,109 @@
+# ==============================================================================
+# PROMTAIL CONFIG - promtail-config.yml
+# Thu thập Docker container logs với label đầy đủ
+# ==============================================================================
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    # Retry với backoff
+    backoff_config:
+      min_period: 500ms
+      max_period: 5m
+      max_retries: 10
+    timeout: 10s
+
+scrape_configs:
+
+  # --------------------------------------------------------------------------
+  # Thu thập logs từ tất cả Docker containers
+  # Sử dụng Docker service discovery để tự động phát hiện container mới
+  # --------------------------------------------------------------------------
+  - job_name: docker_containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          # Chỉ thu thập containers đang chạy
+          - name: status
+            values: ["running"]
+
+    relabel_configs:
+      # Lấy container name làm label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: 'container'
+
+      # Lấy image name
+      - source_labels: ['__meta_docker_container_image_name']
+        target_label: 'image'
+
+      # Lấy container ID (rút gọn 12 ký tự)
+      - source_labels: ['__meta_docker_container_id']
+        regex: '(.{12}).*'
+        target_label: 'container_id'
+
+      # Job label
+      - replacement: 'docker'
+        target_label: 'job'
+
+      # Lấy tất cả Docker labels của container (có prefix docker_label_)
+      - action: labelmap
+        regex: '__meta_docker_container_label_(.+)'
+        replacement: 'docker_label_$1'
+
+    pipeline_stages:
+      # Parse Docker log JSON format
+      - json:
+          expressions:
+            output: log
+            stream: stream
+            time: time
+
+      # Dùng timestamp từ Docker
+      - timestamp:
+          source: time
+          format: RFC3339Nano
+
+      # Output là log content
+      - output:
+          source: output
+
+      # Thêm stream label (stdout/stderr)
+      - labels:
+          stream:
+
+      # Lọc bỏ logs quá dài (tránh abuse Loki)
+      - limit:
+          rate: 1000
+          burst: 2000
+          drop: true
+
+  # --------------------------------------------------------------------------
+  # Thu thập system logs (journald/syslog trên Fedora)
+  # --------------------------------------------------------------------------
+  - job_name: system_journal
+    journal:
+      max_age: 12h
+      path: /var/log/journal
+      labels:
+        job: systemd
+    relabel_configs:
+      - source_labels: ['__journal__systemd_unit']
+        target_label: 'unit'
+      - source_labels: ['__journal__hostname']
+        target_label: 'host'
+
+    pipeline_stages:
+      - multiline:
+          firstline: '^\w+\s+\d+\s+\d+:\d+:\d+'
+          max_wait_time: 3s
+      - labeldrop:
+          - filename

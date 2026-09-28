@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"node_logged_users_total","instance":"fedora-server","job":"node_exporter","service":"system"},"value":[1790044162.485,"3"]}]}}

@@ -1,0 +1,80 @@
+# ==============================================================================
+# GRAFANA ALERTING CONTACT POINTS - contact_points.yml
+# Pre-configured Telegram, Discord, Email channels
+# Điền thông tin thật vào .env file
+# ==============================================================================
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: Telegram Alerts
+    receivers:
+      - uid: telegram-receiver
+        type: telegram
+        settings:
+          bottoken: "${TELEGRAM_BOT_TOKEN}"
+          chatid: "${TELEGRAM_CHAT_ID}"
+          parse_mode: html
+          message: |
+            {{ if eq .Status "firing" }}🔥 <b>ALERT FIRING</b>{{ else }}✅ <b>RESOLVED</b>{{ end }}
+            
+            <b>{{ .GroupLabels.alertname }}</b>
+            Severity: {{ .CommonLabels.severity }}
+            
+            {{ range .Alerts }}
+            📌 <b>{{ .Annotations.summary }}</b>
+            {{ .Annotations.description }}
+            {{ end }}
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Discord Alerts
+    receivers:
+      - uid: discord-receiver
+        type: discord
+        settings:
+          url: "${DISCORD_WEBHOOK_URL}"
+          message: |
+            {{ if eq .Status "firing" }}🔥 **ALERT FIRING** {{ else }}✅ **RESOLVED** {{ end }}
+            **{{ .GroupLabels.alertname }}** | Severity: {{ .CommonLabels.severity }}
+            {{ range .Alerts }}{{ .Annotations.summary }}
+            {{ .Annotations.description }}{{ end }}
+        disableResolveMessage: false
+
+  - orgId: 1
+    name: Email Alerts
+    receivers:
+      - uid: email-receiver
+        type: email
+        settings:
+          addresses: "${ALERTMANAGER_EMAIL_TO}"
+          subject: |
+            [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}
+          message: |
+            Alert: {{ .GroupLabels.alertname }}
+            Status: {{ .Status }}
+            Severity: {{ .CommonLabels.severity }}
+            
+            {{ range .Alerts }}
+            Summary: {{ .Annotations.summary }}
+            Description: {{ .Annotations.description }}
+            {{ end }}
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: Telegram Alerts
+    group_by:
+      - alertname
+      - severity
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      - receiver: Discord Alerts
+        matchers:
+          - severity=~"warning|critical"
+      - receiver: Email Alerts
+        matchers:
+          - severity="critical"

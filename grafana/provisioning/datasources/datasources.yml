@@ -1,0 +1,39 @@
+# ==============================================================================
+# GRAFANA DATASOURCES - Auto-provisioned
+# ==============================================================================
+
+apiVersion: 1
+
+datasources:
+
+  # Prometheus - Metrics
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: '30s'
+      queryTimeout: '60s'
+      httpMethod: POST
+      # Basic auth cho Prometheus (nếu bật web.yml)
+      # basicAuth: true
+      # basicAuthUser: prometheus
+    # secureJsonData:
+    #   basicAuthPassword: your_password
+    editable: false
+
+  # Loki - Logs
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      maxLines: 1000
+      timeout: 60
+      # Derived fields để link từ log sang trace
+      derivedFields:
+        - name: container
+          matcherRegex: 'container="([^"]+)"'
+          url: ''
+    editable: false

@@ -1,0 +1,18 @@
+# HELP db_mysql_found 1 if MySQL/MariaDB is found (Docker or host)
+# TYPE db_mysql_found gauge
+db_mysql_found{container="sunhotel_mysql",image="mysql:8.4"} 1
+# HELP db_mysql_running 1 if MySQL/MariaDB container is running
+# TYPE db_mysql_running gauge
+db_mysql_running{container="sunhotel_mysql"} 1
+# HELP db_mysql_accessible 1 if MySQL/MariaDB is accepting connections
+# TYPE db_mysql_accessible gauge
+db_mysql_accessible{container="sunhotel_mysql"} 1
+# HELP db_postgresql_found 1 if PostgreSQL is found (Docker or host)
+# TYPE db_postgresql_found gauge
+db_postgresql_found{container="sunhotel_postgres",image="postgres:16-alpine"} 1
+# HELP db_postgresql_running 1 if PostgreSQL is running
+# TYPE db_postgresql_running gauge
+db_postgresql_running{container="sunhotel_postgres"} 1
+# HELP db_postgresql_accessible 1 if PostgreSQL is accepting connections
+# TYPE db_postgresql_accessible gauge
+db_postgresql_accessible{container="sunhotel_postgres"} 1
